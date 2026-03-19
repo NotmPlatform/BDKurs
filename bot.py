@@ -1,4 +1,3 @@
-
 import logging
 import os
 import sqlite3
@@ -24,8 +23,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "PASTE_BOT_TOKEN_HERE")
 # Бот должен быть добавлен в приватную группу/канал и иметь права,
 # чтобы проверять участие пользователя.
 PRIVATE_GROUP_ID_RAW = os.getenv("PRIVATE_GROUP_ID", "")
-PRIVATE_GROUP_LINK = os.getenv("PRIVATE_GROUP_LINK", "")
-
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "webhook")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
@@ -233,11 +230,9 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 def subscription_keyboard() -> InlineKeyboardMarkup:
-    buttons = []
-    if PRIVATE_GROUP_LINK:
-        buttons.append([InlineKeyboardButton("🔐 Вступить в группу", url=PRIVATE_GROUP_LINK)])
-    buttons.append([InlineKeyboardButton("✅ Я вступил, проверить", callback_data="check_sub")])
-    return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("✅ Проверить доступ", callback_data="check_sub")]]
+    )
 
 
 def lessons_menu_keyboard(chat_id: int) -> InlineKeyboardMarkup:
@@ -304,9 +299,6 @@ def lesson_text(chat_id: int, lesson_id: int) -> str:
         f"{lesson['title']}\n\n"
         f"Прогресс: {done}/{total}\n"
         f"Статус урока: {status}\n\n"
-        "Выберите формат:\n"
-        "• Текстовый урок — открывает страницу Telegra.ph\n"
-        "• Видео урок — пока заглушка, добавим позже\n\n"
         "После изучения нажмите «Подтвердить изучение»."
     )
 
@@ -364,8 +356,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not await check_membership(user_id, context):
         await update.message.reply_text(
-            "Чтобы получить доступ к курсу, сначала вступи в приватную группу.\n\n"
-            "После вступления нажми «Я вступил, проверить».",
+            "Сейчас у тебя нет доступа к курсу.\n\n"
+            "Если доступ уже был выдан через Tribute, нажми «Проверить доступ».",
             reply_markup=subscription_keyboard(),
         )
         return
@@ -387,7 +379,8 @@ async def lessons_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if not await check_membership(user_id, context):
         await update.message.reply_text(
-            "Доступ к курсу открыт только участникам приватной группы.",
+            "Сейчас у тебя нет доступа к курсу.\n\n"
+            "Если доступ уже был выдан через Tribute, нажми «Проверить доступ».",
             reply_markup=subscription_keyboard(),
         )
         return
@@ -411,7 +404,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Перед доступом ко всем экранам перепроверяем участие
     if query.data not in {"check_sub", "noop"} and not await check_membership(user_id, context):
         await query.edit_message_text(
-            "Сначала вступи в приватную группу, затем нажми проверку.",
+            "Сейчас у тебя нет доступа к курсу.\n\n"
+            "Если доступ уже был выдан через Tribute, нажми «Проверить доступ».",
             reply_markup=subscription_keyboard(),
         )
         return
@@ -426,8 +420,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         else:
             await query.edit_message_text(
-                "Я пока не вижу тебя в приватной группе.\n\n"
-                "Вступи в группу и нажми проверку еще раз.",
+                "Доступ пока не найден.\n\n"
+                "Если оплата или выдача доступа через Tribute уже прошла, нажми проверку еще раз чуть позже.",
                 reply_markup=subscription_keyboard(),
             )
         return
