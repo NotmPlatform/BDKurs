@@ -1,4 +1,3 @@
-
 import logging
 import os
 import sqlite3
@@ -212,11 +211,15 @@ def parse_group_id(value: str) -> Optional[int]:
 
 
 PRIVATE_GROUP_ID = parse_group_id(PRIVATE_GROUP_ID_RAW)
+# ВАЖНО: если PRIVATE_GROUP_ID не задан, бот НЕ должен открывать курс.
 
 
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # Fail closed:
+    # если PRIVATE_GROUP_ID не задан, доступ НЕ открываем.
     if not PRIVATE_GROUP_ID:
-        return True
+        logger.error("PRIVATE_GROUP_ID не настроен. Проверка доступа невозможна.")
+        return False
 
     try:
         member = await context.bot.get_chat_member(PRIVATE_GROUP_ID, user_id)
@@ -226,7 +229,7 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
             ChatMemberStatus.OWNER,
         }
     except Exception as e:
-        logger.warning("Не удалось проверить подписку user_id=%s: %s", user_id, e)
+        logger.warning("Не удалось проверить доступ user_id=%s: %s", user_id, e)
         return False
 
 
