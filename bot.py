@@ -127,7 +127,6 @@ def init_db() -> None:
         """
     )
 
-    # Привязка урока к сообщению в канале-источнике
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS lesson_videos (
@@ -140,7 +139,6 @@ def init_db() -> None:
         """
     )
 
-    # Какое видео сейчас считается активным в диалоге пользователя
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS active_video_messages (
@@ -170,7 +168,8 @@ def ensure_user(chat_id: int) -> None:
             """
             INSERT OR IGNORE INTO lesson_progress(chat_id, lesson_id, completed, completed_at)
             VALUES(?, ?, 0, NULL)
-            """,
+            """
+            ,
             (chat_id, lesson_id),
         )
 
@@ -186,7 +185,8 @@ def mark_lesson_completed(chat_id: int, lesson_id: int) -> None:
         UPDATE lesson_progress
         SET completed = 1, completed_at = ?
         WHERE chat_id = ? AND lesson_id = ?
-        """,
+        """
+        ,
         (datetime.utcnow().isoformat(), chat_id, lesson_id),
     )
     conn.commit()
@@ -201,7 +201,8 @@ def is_lesson_completed(chat_id: int, lesson_id: int) -> bool:
         SELECT completed
         FROM lesson_progress
         WHERE chat_id = ? AND lesson_id = ?
-        """,
+        """
+        ,
         (chat_id, lesson_id),
     ).fetchone()
     conn.close()
@@ -216,7 +217,8 @@ def completed_count(chat_id: int) -> int:
         SELECT COUNT(*) AS cnt
         FROM lesson_progress
         WHERE chat_id = ? AND completed = 1
-        """,
+        """
+        ,
         (chat_id,),
     ).fetchone()
     conn.close()
@@ -239,7 +241,8 @@ def upsert_lesson_video(lesson_id: int, source_chat_id: int, source_message_id: 
             source_message_id = excluded.source_message_id,
             source_label = excluded.source_label,
             updated_at = excluded.updated_at
-        """,
+        """
+        ,
         (
             lesson_id,
             source_chat_id,
@@ -260,7 +263,8 @@ def get_lesson_video(lesson_id: int) -> Optional[sqlite3.Row]:
         SELECT lesson_id, source_chat_id, source_message_id, source_label, updated_at
         FROM lesson_videos
         WHERE lesson_id = ?
-        """,
+        """
+        ,
         (lesson_id,),
     ).fetchone()
     conn.close()
@@ -292,7 +296,8 @@ def set_active_video_message(chat_id: int, lesson_id: int, message_id: int) -> N
             lesson_id = excluded.lesson_id,
             message_id = excluded.message_id,
             created_at = excluded.created_at
-        """,
+        """
+        ,
         (chat_id, lesson_id, message_id, datetime.utcnow().isoformat()),
     )
     conn.commit()
@@ -307,7 +312,8 @@ def get_active_video_message(chat_id: int) -> Optional[sqlite3.Row]:
         SELECT chat_id, lesson_id, message_id, created_at
         FROM active_video_messages
         WHERE chat_id = ?
-        """,
+        """
+        ,
         (chat_id,),
     ).fetchone()
     conn.close()
@@ -352,9 +358,6 @@ def parse_admin_ids(value: str) -> Set[int]:
 PRIVATE_GROUP_ID = parse_int_env(PRIVATE_GROUP_ID_RAW)
 VIDEO_CHANNEL_ID = parse_int_env(VIDEO_CHANNEL_ID_RAW)
 ADMIN_IDS = parse_admin_ids(ADMIN_IDS_RAW)
-
-# ВАЖНО: если PRIVATE_GROUP_ID не задан, бот НЕ должен открывать курс.
-# ВАЖНО: если VIDEO_CHANNEL_ID не задан, бот не сможет отправлять видео из канала.
 
 
 def is_admin(user_id: Optional[int]) -> bool:
@@ -405,7 +408,7 @@ def lesson_keyboard(chat_id: int, lesson_id: int) -> InlineKeyboardMarkup:
 
     rows.append([
         InlineKeyboardButton("📖 Текстовый урок", url=lesson["text_url"]),
-        InlineKeyboardButton("🎬 Смотреть видео", callback_data=f"watch_video:{lesson_id}"),
+        InlineKeyboardButton("🎬 Смотреть видео урок", callback_data=f"watch_video:{lesson_id}"),
     ])
 
     if is_lesson_completed(chat_id, lesson_id):
@@ -491,9 +494,6 @@ def completion_text() -> str:
 
 
 def parse_lesson_alias(value: str) -> Optional[int]:
-    """
-    Ищет в подписи/тексте канала маркер вида bd1, bd2, BD 3 и т.д.
-    """
     if not value:
         return None
 
@@ -654,13 +654,22 @@ async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if VIDEO_CHANNEL_ID and post.chat.id != VIDEO_CHANNEL_ID:
         return
 
-    # Берем caption либо text
-    raw_text = (post.caption or post.text or "").strip()
+    parts = [
+        post.caption or "",
+        post.text or "",
+        getattr(post.video, "file_name", "") if post.video else "",
+        getattr(post.document, "file_name", "") if post.document else "",
+    ]
+    raw_text = " ".join(p.strip() for p in parts if p and p.strip())
+
     lesson_id = parse_lesson_alias(raw_text)
     if not lesson_id:
+        logger.info(
+            "Канал пост без lesson alias: message_id=%s raw_text=%s",
+            post.message_id, raw_text
+        )
         return
 
-    # Привязываем любые новые посты с маркером bdN.
     upsert_lesson_video(
         lesson_id=lesson_id,
         source_chat_id=post.chat.id,
@@ -684,10 +693,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ensure_user(chat_id)
 
     data = query.data or ""
-    await query.answer()
 
     if data not in {"check_sub", "noop"} and not await check_membership(user_id, context):
         await delete_active_video_if_exists(chat_id, context)
+        await query.answer()
         await query.edit_message_text(
             "Сейчас у тебя нет доступа к курсу.\n\n"
             "Если доступ уже был выдан через Tribute, нажми «Проверить доступ».",
@@ -698,11 +707,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "check_sub":
         await delete_active_video_if_exists(chat_id, context)
         if await check_membership(user_id, context):
+            await query.answer()
             await query.edit_message_text(
                 main_menu_text(chat_id),
                 reply_markup=lessons_menu_keyboard(chat_id),
             )
         else:
+            await query.answer("Доступ пока не найден.", show_alert=True)
             await query.edit_message_text(
                 "Доступ пока не найден.\n\n"
                 "Если оплата или выдача доступа через Tribute уже прошла, нажми проверку еще раз чуть позже.",
@@ -712,6 +723,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "menu":
         await delete_active_video_if_exists(chat_id, context)
+        await query.answer()
         await query.edit_message_text(
             main_menu_text(chat_id),
             reply_markup=lessons_menu_keyboard(chat_id),
@@ -720,6 +732,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "show_progress":
         await delete_active_video_if_exists(chat_id, context)
+        await query.answer()
         await query.edit_message_text(
             progress_text(chat_id),
             reply_markup=InlineKeyboardMarkup(
@@ -731,6 +744,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data.startswith("open_lesson:"):
         lesson_id = int(data.split(":")[1])
         await delete_active_video_if_exists(chat_id, context)
+        await query.answer()
         await query.edit_message_text(
             lesson_text(chat_id, lesson_id),
             reply_markup=lesson_keyboard(chat_id, lesson_id),
@@ -740,6 +754,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data.startswith("watch_video:"):
         lesson_id = int(data.split(":")[1])
         lesson_video = get_lesson_video(lesson_id)
+
+        logger.info(
+            "watch_video clicked: lesson_id=%s, lesson_video=%s",
+            lesson_id,
+            dict(lesson_video) if lesson_video else None
+        )
 
         if not VIDEO_CHANNEL_ID:
             await query.answer("VIDEO_CHANNEL_ID не настроен.", show_alert=True)
@@ -769,7 +789,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except TelegramError as e:
             logger.exception("Не удалось отправить видео урока %s: %s", lesson_id, e)
             await query.answer(
-                "Не удалось открыть видео. Проверь, что бот добавлен в канал с видео и имеет доступ.",
+                "Не удалось открыть видео. Проверь права бота в канале и message_id.",
                 show_alert=True,
             )
         return
@@ -780,24 +800,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if all_lessons_completed(chat_id):
             await delete_active_video_if_exists(chat_id, context)
+            await query.answer("Курс завершен!")
             await query.edit_message_text(
                 completion_text(),
                 reply_markup=completion_keyboard(),
             )
             return
 
+        await query.answer("Урок подтвержден.")
         await query.edit_message_text(
             lesson_text(chat_id, lesson_id),
             reply_markup=lesson_keyboard(chat_id, lesson_id),
         )
-
-        done = completed_count(chat_id)
-        left = len(LESSONS) - done
-        await query.answer(f"Урок подтвержден. Осталось: {left}", show_alert=False)
         return
 
     if data == "noop":
+        await query.answer()
         return
+
+    await query.answer()
 
 
 # =========================================
@@ -812,10 +833,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("setvideo", setvideo_command))
     app.add_handler(CommandHandler("videos", videos_command))
 
-    # Обработка новых постов в канале с видео.
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, on_channel_post))
-
     app.add_handler(CallbackQueryHandler(on_callback))
+
     return app
 
 
@@ -861,6 +881,7 @@ if __name__ == "__main__":
 3. Для НОВЫХ видео:
    - Загружай видео в канал
    - В подписи пиши bd1, bd2, bd3 ... bd6
+   - Или укажи bd1, bd2 и т.д. в имени файла
    - Бот сам запомнит соответствие
 
 4. Для УЖЕ загруженных СТАРЫХ видео:
@@ -873,7 +894,7 @@ if __name__ == "__main__":
      /videos
 
 5. Логика работы:
-   - При нажатии "Смотреть видео" бот копирует видео из закрытого канала в личный чат
+   - При нажатии "Смотреть видео урок" бот копирует видео из закрытого канала в личный чат
    - Перед отправкой нового видео бот удаляет предыдущее активное видео в этом чате
    - При переходе по меню/урокам активное видео тоже удаляется
 """
