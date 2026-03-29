@@ -405,7 +405,7 @@ def lesson_keyboard(chat_id: int, lesson_id: int) -> InlineKeyboardMarkup:
 
     rows.append([
         InlineKeyboardButton("📖 Текстовый урок", url=lesson["text_url"]),
-        InlineKeyboardButton("🎬 Смотреть видео урок", callback_data=f"watch_video:{lesson_id}"),
+        InlineKeyboardButton("🎬 Смотреть видео", callback_data=f"watch_video:{lesson_id}"),
     ])
 
     if is_lesson_completed(chat_id, lesson_id):
@@ -873,7 +873,7 @@ if __name__ == "__main__":
      /videos
 
 5. Логика работы:
-   - При нажатии "Смотреть видео урок" бот копирует видео из закрытого канала в личный чат
+   - При нажатии "Смотреть видео" бот копирует видео из закрытого канала в личный чат
    - Перед отправкой нового видео бот удаляет предыдущее активное видео в этом чате
    - При переходе по меню/урокам активное видео тоже удаляется
 """
