@@ -76,6 +76,23 @@ LESSONS: Dict[int, Dict[str, str]] = {
     },
 }
 
+# ЖЕСТКО ЗАДАННЫЕ ПРИВЯЗКИ ВИДЕО ИЗ ТВОЕГО КАНАЛА
+# Ссылки:
+# УРОК 1 https://t.me/c/3723306059/35
+# УРОК 2 https://t.me/c/3723306059/36
+# УРОК 3 https://t.me/c/3723306059/37
+# УРОК 4 https://t.me/c/3723306059/38
+# УРОК 5 https://t.me/c/3723306059/39
+# УРОК 6 https://t.me/c/3723306059/40
+DEFAULT_LESSON_VIDEO_BINDINGS: Dict[int, int] = {
+    1: 35,
+    2: 36,
+    3: 37,
+    4: 38,
+    5: 39,
+    6: 40,
+}
+
 BONUSES = [
     ("БОНУС 1. BD PARTNER AUDIT CHECKLIST", "https://telegra.ph/BONUS-1-BD-PARTNER-AUDIT-CHECKLIST-03-19"),
     ("БОНУС 2. EXCHANGE BATTLE CARD TEMPLATE", "https://telegra.ph/BONUS-2-EXCHANGE-BATTLE-CARD-TEMPLATE-03-19"),
@@ -168,8 +185,7 @@ def ensure_user(chat_id: int) -> None:
             """
             INSERT OR IGNORE INTO lesson_progress(chat_id, lesson_id, completed, completed_at)
             VALUES(?, ?, 0, NULL)
-            """
-            ,
+            """,
             (chat_id, lesson_id),
         )
 
@@ -185,8 +201,7 @@ def mark_lesson_completed(chat_id: int, lesson_id: int) -> None:
         UPDATE lesson_progress
         SET completed = 1, completed_at = ?
         WHERE chat_id = ? AND lesson_id = ?
-        """
-        ,
+        """,
         (datetime.utcnow().isoformat(), chat_id, lesson_id),
     )
     conn.commit()
@@ -201,8 +216,7 @@ def is_lesson_completed(chat_id: int, lesson_id: int) -> bool:
         SELECT completed
         FROM lesson_progress
         WHERE chat_id = ? AND lesson_id = ?
-        """
-        ,
+        """,
         (chat_id, lesson_id),
     ).fetchone()
     conn.close()
@@ -217,8 +231,7 @@ def completed_count(chat_id: int) -> int:
         SELECT COUNT(*) AS cnt
         FROM lesson_progress
         WHERE chat_id = ? AND completed = 1
-        """
-        ,
+        """,
         (chat_id,),
     ).fetchone()
     conn.close()
@@ -241,8 +254,7 @@ def upsert_lesson_video(lesson_id: int, source_chat_id: int, source_message_id: 
             source_message_id = excluded.source_message_id,
             source_label = excluded.source_label,
             updated_at = excluded.updated_at
-        """
-        ,
+        """,
         (
             lesson_id,
             source_chat_id,
@@ -263,8 +275,7 @@ def get_lesson_video(lesson_id: int) -> Optional[sqlite3.Row]:
         SELECT lesson_id, source_chat_id, source_message_id, source_label, updated_at
         FROM lesson_videos
         WHERE lesson_id = ?
-        """
-        ,
+        """,
         (lesson_id,),
     ).fetchone()
     conn.close()
@@ -296,8 +307,7 @@ def set_active_video_message(chat_id: int, lesson_id: int, message_id: int) -> N
             lesson_id = excluded.lesson_id,
             message_id = excluded.message_id,
             created_at = excluded.created_at
-        """
-        ,
+        """,
         (chat_id, lesson_id, message_id, datetime.utcnow().isoformat()),
     )
     conn.commit()
@@ -312,8 +322,7 @@ def get_active_video_message(chat_id: int) -> Optional[sqlite3.Row]:
         SELECT chat_id, lesson_id, message_id, created_at
         FROM active_video_messages
         WHERE chat_id = ?
-        """
-        ,
+        """,
         (chat_id,),
     ).fetchone()
     conn.close()
@@ -362,6 +371,36 @@ ADMIN_IDS = parse_admin_ids(ADMIN_IDS_RAW)
 
 def is_admin(user_id: Optional[int]) -> bool:
     return bool(user_id and user_id in ADMIN_IDS)
+
+
+def seed_default_lesson_videos() -> None:
+    """
+    Один раз заполняет базу привязками из DEFAULT_LESSON_VIDEO_BINDINGS,
+    если для урока еще нет записи в lesson_videos.
+    """
+    if not VIDEO_CHANNEL_ID:
+        logger.warning("seed_default_lesson_videos: VIDEO_CHANNEL_ID не настроен")
+        return
+
+    for lesson_id, message_id in DEFAULT_LESSON_VIDEO_BINDINGS.items():
+        existing = get_lesson_video(lesson_id)
+        if existing:
+            logger.info(
+                "Привязка уже есть: lesson_id=%s message_id=%s",
+                lesson_id, existing["source_message_id"]
+            )
+            continue
+
+        upsert_lesson_video(
+            lesson_id=lesson_id,
+            source_chat_id=VIDEO_CHANNEL_ID,
+            source_message_id=message_id,
+            source_label=f"hardcoded:lesson_{lesson_id}",
+        )
+        logger.info(
+            "Добавлена жесткая привязка: lesson_id=%s channel_id=%s message_id=%s",
+            lesson_id, VIDEO_CHANNEL_ID, message_id
+        )
 
 
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -844,6 +883,7 @@ def main() -> None:
         raise RuntimeError("Укажи BOT_TOKEN в переменных окружения.")
 
     init_db()
+    seed_default_lesson_videos()
     app = build_application()
 
     logger.info("PRIVATE_GROUP_ID=%s", PRIVATE_GROUP_ID)
@@ -867,34 +907,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-"""
-КАК ПОДКЛЮЧИТЬ:
-
-1. Добавь бота админом в канал с видео.
-2. Укажи:
-   BOT_TOKEN=...
-   PRIVATE_GROUP_ID=...
-   VIDEO_CHANNEL_ID=-1003723306059
-   ADMIN_IDS=твой_telegram_id
-
-3. Для НОВЫХ видео:
-   - Загружай видео в канал
-   - В подписи пиши bd1, bd2, bd3 ... bd6
-   - Или укажи bd1, bd2 и т.д. в имени файла
-   - Бот сам запомнит соответствие
-
-4. Для УЖЕ загруженных СТАРЫХ видео:
-   - Узнай message_id поста в канале
-   - Отправь боту:
-     /setvideo 1 123
-     /setvideo 2 124
-     ...
-   - Проверить можно командой:
-     /videos
-
-5. Логика работы:
-   - При нажатии "Смотреть видео урок" бот копирует видео из закрытого канала в личный чат
-   - Перед отправкой нового видео бот удаляет предыдущее активное видео в этом чате
-   - При переходе по меню/урокам активное видео тоже удаляется
-"""
